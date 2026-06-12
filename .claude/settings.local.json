@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"C:\\\\Users\\\\moham\\\\OneDrive\\\\Desktop\\\\RAG Project\" && ls \"C:\\\\Users\\\\moham\\\\OneDrive\\\\Desktop\" | grep -i lafayette)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\moham\\\\OneDrive\\\\Desktop\" | Where-Object { $_.Name -match \"Lafayette|student_profile|RAG\" })"
+    ]
+  }
+}

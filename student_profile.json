@@ -1,0 +1,56 @@
+{
+  "name": "Mohammad Rasim Omer",
+  "student_id": "L04502934",
+  "degree": "Bachelor of Science",
+  "major": "Computer Science",
+  "class_year": 2029,
+  "expected_graduation": "May 2029",
+  "advisor": "Ge Xia",
+  "overall_gpa": 3.82,
+  "cs_major_gpa": 3.65,
+  "audit_date": "2026-05-26",
+  "credits": {
+    "required": 32,
+    "applied": 15,
+    "still_needed": 17
+  },
+  "cs_major_credits": {
+    "required": 22,
+    "applied": 10
+  },
+  "completed_courses": [
+    { "code": "CS 099",   "title": "Elective in Computer Science",      "grade": "TR",  "credits": 1, "term": "Fall 2025",   "note": "Transfer credit (A-levels)" },
+    { "code": "CS 105",   "title": "Digital Media Computing",           "grade": "A",   "credits": 1, "term": "Fall 2025" },
+    { "code": "CS 150",   "title": "Data Structures & Algorithms",      "grade": "B+",  "credits": 1, "term": "Spring 2026" },
+    { "code": "MATH 161", "title": "Calculus I",                        "grade": "A",   "credits": 1, "term": "Fall 2025" },
+    { "code": "MATH 162", "title": "Calculus II",                       "grade": "A",   "credits": 1, "term": "Spring 2026" },
+    { "code": "MATH 182", "title": "Discrete Structures",               "grade": "A-",  "credits": 1, "term": "Spring 2026" },
+    { "code": "FYS 135",  "title": "Factory Farms: True Cost of Meat",  "grade": "A",   "credits": 1, "term": "Fall 2025",   "note": "Satisfies FYS writing requirement" },
+    { "code": "FAMS 101", "title": "Intro to Film & Media Studies",     "grade": "A-",  "credits": 1, "term": "Fall 2025" },
+    { "code": "ECON 101", "title": "Principles of Economics",           "grade": "A",   "credits": 1, "term": "Spring 2026" },
+    { "code": "ES 105",   "title": "Intro Engineering for Non-Engr",    "grade": "A-",  "credits": 1, "term": "Spring 2026" }
+  ],
+  "in_progress_courses": [
+    { "code": "CS 202",   "title": "Analysis of Algorithms",   "credits": 1, "term": "Fall 2026" },
+    { "code": "CS 203",   "title": "Computer Organization",    "credits": 1, "term": "Fall 2026" },
+    { "code": "CHEM 107", "title": "General Chemistry I",      "credits": 1, "term": "Fall 2026" },
+    { "code": "MATH 263", "title": "Calculus III",             "credits": 1, "term": "Fall 2026" },
+    { "code": "MATH 272", "title": "Linear Algebra with Apps", "credits": 1, "term": "Fall 2026" }
+  ],
+  "requirements_still_needed": {
+    "cs_major_core": [
+      "CS 200 - Computers and Society",
+      "CS 205 - Software Engineering",
+      "CS 301 - (required core)",
+      "CS 303 - (required core)",
+      "CS 406 - (required core)",
+      "CS 470 or CS 496"
+    ],
+    "cs_major_electives": "3 courses in CS 300-499 (excluding CS 390, 391, 411)",
+    "cs_major_math": "MATH 186, MATH 286, MATH 336, or PSYC 120",
+    "cs_major_science": "1 lab science course (BIOL/CHEM/GEOL/NEUR/PHYS 131-499/PSYC 110 with NS attribute)",
+    "cs_major_writing": "1 CS course with WRIT attribute",
+    "writing_requirement": "3 more W courses needed: 1 in major, 1 outside major, 1 from any subject (FYS already satisfied)",
+    "ccs": "1 course with CECS attribute; Elementary Proficiency (EPSL attribute or waiver)"
+  }
+}
