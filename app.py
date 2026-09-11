@@ -216,7 +216,7 @@ for msg in st.session_state.messages:
             with st.expander("Sources", expanded=False):
                 for chunk in msg["context"]:
                     st.markdown(
-                        f'<span class="source-chip">Page {chunk["metadata"]["page"]}</span>'
+                        f'<span class="source-chip">Page {chunk.get("start_page") or chunk["metadata"].get("start_page", "?")}</span>'
                         f'<span class="source-chip">{chunk["metadata"]["section_type"]}</span>'
                         f'<span class="source-chip">score {chunk["score"]}</span>',
                         unsafe_allow_html=True
@@ -246,7 +246,7 @@ if prompt:
             with st.expander("Sources", expanded=False):
                 for chunk in chunks:
                     st.markdown(
-                        f'<span class="source-chip">Page {chunk["metadata"]["page"]}</span>'
+                        f'<span class="source-chip">Page {chunk.get("start_page") or chunk["metadata"].get("start_page", "?")}</span>'
                         f'<span class="source-chip">{chunk["metadata"]["section_type"]}</span>'
                         f'<span class="source-chip">score {chunk["score"]}</span>',
                         unsafe_allow_html=True
