@@ -1,0 +1,33 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# PDFs (large source files — not needed in repo)
+Lafayette-College_25-26-VA.pdf
+audit-L04502934-AA27GSdn.pdf
+
+# Scratch / debug files
+output.md
+output.txt
+output_items.json
+chunks_dump.md
+debug_retrieval.py
+dump_chunks.py
+test_chunks.py
+test_cs_chunks.py
+z
+
+# DeepEval cache
+.deepeval/
+
+# VS Code
+.vscode/
+
+# Claude Code local settings
+.claude/

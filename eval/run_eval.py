@@ -26,19 +26,39 @@ from deepeval.metrics import (
     ContextualPrecisionMetric,
     ContextualRecallMetric,
 )
-from deepeval.models.llms import GeminiModel
+from deepeval.models import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase
+from google import genai
+from google.genai import types
 
 from rag import ask
 from retriever import Retriever
 
 # ---------------------------------------------------------------------------
-# Judge model — Gemini 2.5 Flash
+# Judge model — Gemini 2.0 Flash
 # ---------------------------------------------------------------------------
-judge = GeminiModel(
-    model="gemini-2.0-flash",
-    api_key=os.environ["GEMINI_API_KEY"],
-)
+class GeminiJudge(DeepEvalBaseLLM):
+    def __init__(self):
+        self._client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+    def load_model(self):
+        return self._client
+
+    def generate(self, prompt: str) -> str:
+        response = self._client.models.generate_content(
+            model="gemini-2.0-flash",
+            config=types.GenerateContentConfig(temperature=0.0),
+            contents=prompt,
+        )
+        return response.text
+
+    async def a_generate(self, prompt: str) -> str:
+        return self.generate(prompt)
+
+    def get_model_name(self) -> str:
+        return "gemini-2.0-flash"
+
+judge = GeminiJudge()
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -90,9 +110,14 @@ def build_test_case(entry: dict) -> LLMTestCase | None:
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Set QUICK=1 to run only 1 test case (saves API tokens)
+    import sys
+    quick = "--quick" in sys.argv
+    entries = dataset[:1] if quick else dataset
+
     print("Building test cases...\n")
     test_cases = []
-    for entry in dataset:
+    for entry in entries:
         tc = build_test_case(entry)
         if tc:
             test_cases.append(tc)

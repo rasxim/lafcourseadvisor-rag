@@ -1,241 +1,220 @@
-"""
-ingest.py — PDF -> LlamaParse (agentic, items) -> chunks -> ChromaDB
-
-LlamaParse returns structured page items (HeadingItem, TextItem, TableItem...).
-We group items under each course-header heading into one chunk per course entry.
-Non-course pages (policy, requirements) are kept as whole-page chunks.
-"""
-
 import re
 import os
-from pathlib import Path
+from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 import chromadb
-from sentence_transformers import SentenceTransformer
 from llama_cloud import LlamaCloud
-from llama_cloud.types import HeadingItem, TableItem
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 load_dotenv()
-_embedder     = SentenceTransformer("all-MiniLM-L6-v2")
-_llama_client = LlamaCloud(api_key=os.environ["LLAMA_CLOUD_API_KEY"])
 
 PDF_PATH        = "Lafayette-College_25-26-VA.pdf"
-ITEMS_CACHE     = "output_items.json"   # cached so re-runs skip re-parsing
 CHROMA_DIR      = "./chroma_db"
 COLLECTION_NAME = "lafayette_catalog"
 
-# ---------------------------------------------------------------------------
-# TOC page ranges -> section_type
-# ---------------------------------------------------------------------------
 TOC_RANGES = [
-    (1,   30,  "academic_policy",    None),
-    (31,  76,  "major_requirements", None),
-    (77, 213,  "course_description", None),
+    (1,   31,  "academic_policy"),
+    (32,  76,  "major_requirements"),
+    (77, 213,  "course_description"),
 ]
 
-# Course code pattern for metadata tagging: "CS 301 - Computer Systems (1)"
-COURSE_HEADING_RE = re.compile(
-    r'^([A-Z]{2,4})\s(\d{3}[A-Z]?)\s[-–]?\s*.+\(\d\)'
-)
+_PAGE_MARKER_RE = re.compile(r"<!-- PAGE (\d+) -->")
 
-PREREQ_RE = re.compile(r'[Pp]rerequisites?[:\s]+([A-Z]{2,4}\s\d{3}[A-Z]?)')
-COREQ_RE  = re.compile(r'[Cc]orequisites?[:\s]+([A-Z]{2,4}\s\d{3}[A-Z]?)')
-PERM_RE   = re.compile(r'[Ii]nstructor\s+permission', re.IGNORECASE)
+# Prefer headings → blank lines → list boundaries → sentences → spaces.
+# Operates within a header section, so h4/h5 are the deepest headings seen here.
+_MD_SEPARATORS = [
+    "\n## ", "\n### ", "\n#### ", "\n##### ",
+    "\n\n",
+    "\n- ", "\n* ", "\n1. ",
+    ". ",
+    " ",
+    "",
+]
 
 
-def section_type_for_page(page_num: int) -> tuple[str, str | None]:
-    for start, end, stype, dept in TOC_RANGES:
+def section_for_page(page_num: int) -> str:
+    for start, end, section in TOC_RANGES:
         if start <= page_num <= end:
-            return stype, dept
-    return "course_description", None
+            return section
+    return "other"
 
 
-def is_toc_text(text: str) -> bool:
-    return text.count("...") >= 5
-
-
-def extract_metadata(text: str, section_type: str, department: str | None, page: int) -> dict:
-    course_code = None
-    # Strip markdown heading markers (##, **, etc.) before matching
-    first_line = re.sub(r'^#+\s*', '', text.split('\n')[0].strip())
-    first_line = re.sub(r'\*+', '', first_line).strip()
-    m = COURSE_HEADING_RE.match(first_line)
-    if m:
-        dept_code    = m.group(1)
-        num          = m.group(2)
-        course_code  = f"{dept_code} {num}"
-        department   = dept_code
-        section_type = "course_description"
-
-    prereq = (PREREQ_RE.search(text) or None) and PREREQ_RE.search(text).group(1)
-    coreq  = (COREQ_RE.search(text)  or None) and COREQ_RE.search(text).group(1)
-
-    return {
-        "section_type":          section_type,
-        "department":            department or "",
-        "course_code":           course_code or "",
-        "prereq":                prereq or "",
-        "coreq":                 coreq or "",
-        "instructor_permission": bool(PERM_RE.search(text)),
-        "page":                  page,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Step 1 — Parse PDF with LlamaParse (cached as JSON)
-# ---------------------------------------------------------------------------
-
-def parse_pdf_to_items() -> list[dict]:
-    """
-    Returns a list of page dicts:
-      { "page_number": int, "items": [ {"type": str, "md": str, ...}, ... ] }
-    Cached to ITEMS_CACHE after first call.
-    """
-    import json
-
-    cache = Path(ITEMS_CACHE)
-    if cache.exists():
-        print(f"Using cached items: {ITEMS_CACHE}")
-        return json.loads(cache.read_text(encoding="utf-8"))
-
-    print("Uploading PDF to LlamaParse...")
-    with open(PDF_PATH, "rb") as f:
-        file_obj = _llama_client.files.create(
-            file=(Path(PDF_PATH).name, f), purpose="parse"
-        )
-
-    print("Parsing (tier=agentic) — this takes a few minutes...")
-    result = _llama_client.parsing.parse(
-        file_id=file_obj.id,
+def parse_pdf() -> list[dict]:
+    """Send PDF to LlamaParse (agentic tier) and return per-page markdown."""
+    client   = LlamaCloud()
+    uploaded = client.files.create(file=PDF_PATH, purpose="parse")
+    result   = client.parsing.parse(
+        file_id=uploaded.id,
         tier="agentic",
         version="latest",
-        expand=["items"],
+        expand=["markdown"],
     )
-
-    # Serialise to plain dicts for caching
-    pages_data = []
-    for page in result.items.pages:
-        if not page.success:
-            print(f"  Warning: page {page.page_number} failed: {page.error}")
-            continue
-        page_items = []
-        for item in page.items:
-            entry = {"type": item.type, "md": item.md}
-            if isinstance(item, HeadingItem):
-                entry["level"] = item.level
-                entry["value"] = item.value
-            if isinstance(item, TableItem):
-                entry["csv"] = item.csv
-            page_items.append(entry)
-        pages_data.append({"page_number": page.page_number, "items": page_items})
-
-    cache.write_text(
-        json.dumps(pages_data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(f"Parsed {len(pages_data)} pages -> cached to {ITEMS_CACHE}")
-    return pages_data
+    return [
+        {"page_number": i + 1, "markdown": p.markdown}
+        for i, p in enumerate(result.markdown.pages)
+    ]
 
 
-# ---------------------------------------------------------------------------
-# Step 2 — Build chunks from structured items
-# ---------------------------------------------------------------------------
+def _merge_pages(pages: list[dict]) -> str:
+    """Combine all pages into one markdown string with embedded page markers."""
+    parts = []
+    for p in pages:
+        parts.append(f"<!-- PAGE {p['page_number']} -->")
+        parts.append(p["markdown"])
+    return "\n\n".join(parts)
 
-def build_chunks(pages_data: list[dict]) -> list[dict]:
-    """
-    For course-description pages: group all items that belong to a course entry
-    (from its ## heading to just before the next ## heading) into one chunk.
 
-    For all other pages: emit one chunk per page (policy / requirements prose).
-    """
-    all_chunks = []
+def _page_breaks_in(text: str) -> list[tuple[int, int]]:
+    """Return sorted (char_offset, page_num) pairs for every marker in text."""
+    return [(m.start(), int(m.group(1))) for m in _PAGE_MARKER_RE.finditer(text)]
 
-    for page in pages_data:
-        page_num     = page["page_number"]
-        items        = page["items"]
-        section_type, department = section_type_for_page(page_num)
 
-        # Flatten page to plain text for TOC detection
-        page_text = "\n".join(i["md"] for i in items).strip()
-        if not page_text or is_toc_text(page_text):
-            continue
-
-        if section_type == "course_description":
-            # Each H2 heading starts a new chunk — trust LlamaParse agentic structure
-            current_lines: list[str] = []
-
-            def flush(lines: list[str]):
-                text = "\n".join(lines).strip()
-                if not text:
-                    return
-                meta = extract_metadata(text, section_type, department, page_num)
-                all_chunks.append({"text": text, "metadata": meta})
-
-            for item in items:
-                if item["type"] == "heading" and item.get("level") == 2:
-                    flush(current_lines)
-                    current_lines = [item["md"]]
-                else:
-                    current_lines.append(item["md"])
-
-            flush(current_lines)
-
+def _page_at_offset(breaks: list[tuple[int, int]], offset: int, default: int) -> int:
+    """Page number active at `offset` — the last marker at or before the offset."""
+    page = default
+    for pos, num in breaks:
+        if pos <= offset:
+            page = num
         else:
-            # Policy / requirements page — one chunk for the whole page
-            meta = extract_metadata(page_text, section_type, department, page_num)
-            all_chunks.append({"text": page_text, "metadata": meta})
-
-    # Deduplicate by exact text
-    seen    = set()
-    deduped = []
-    for chunk in all_chunks:
-        if chunk["text"] not in seen:
-            seen.add(chunk["text"])
-            deduped.append(chunk)
-
-    print(f"Total chunks: {len(all_chunks)} -> {len(deduped)} after dedup")
-    return deduped
+            break
+    return page
 
 
-# ---------------------------------------------------------------------------
-# Step 3 — Embed and store in ChromaDB
-# ---------------------------------------------------------------------------
+def _remove_markers(text: str) -> str:
+    return _PAGE_MARKER_RE.sub("", text).strip()
+
+
+def _heading_in_text(heading: str, text: str) -> bool:
+    """True if the first line of text is already this heading (with any # prefix)."""
+    first_line = text.lstrip().split("\n")[0]
+    return re.sub(r"^#+\s*", "", first_line).strip() == heading
+
+
+def _enrich_text(chunk_text: str, meta: dict) -> str:
+    """Build embedding text with labeled headings prepended, skipping any already
+    present in the chunk to avoid duplication."""
+    h1 = meta.get("parent_h1", "")
+    h2 = meta.get("parent_h2", "")
+    h3 = meta.get("parent_h3", "")
+    parts = []
+    if h1 and not _heading_in_text(h1, chunk_text):
+        parts.append(f"Section: {h1}")
+    if h2 and not _heading_in_text(h2, chunk_text):
+        parts.append(f"Subsection: {h2}")
+    if h3 and not _heading_in_text(h3, chunk_text):
+        parts.append(f"Topic: {h3}")
+    parts.append(chunk_text)
+    return "\n".join(parts)
+
+
+def _heading_path(meta: dict) -> str:
+    return " > ".join(
+        h for h in (meta.get("parent_h1", ""), meta.get("parent_h2", ""), meta.get("parent_h3", ""))
+        if h
+    )
+
+
+def build_chunks(pages: list[dict]) -> list[dict]:
+    merged = _merge_pages(pages)
+
+    header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[
+        ("#",   "parent_h1"),
+        ("##",  "parent_h2"),
+        ("###", "parent_h3"),
+    ])
+    header_docs = header_splitter.split_text(merged)
+
+    char_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=150,
+        add_start_index=True,
+        separators=_MD_SEPARATORS,
+    )
+
+    chunks = []
+    # Tracks the page active at the START of each header section.
+    # Updated once per header section (not per fine chunk) — far less fragile.
+    current_entry_page = 1
+
+    for header_doc in header_docs:
+        text   = header_doc.page_content
+        breaks = _page_breaks_in(text)
+        entry  = current_entry_page
+
+        # split_documents propagates header metadata and adds start_index per chunk
+        fine_docs = char_splitter.create_documents(
+            [text],
+            metadatas=[dict(header_doc.metadata)],
+        )
+
+        for fine_doc in fine_docs:
+            # start_index is the byte offset of this chunk within the header section
+            start_idx  = fine_doc.metadata.pop("start_index", 0)
+            end_idx    = start_idx + len(fine_doc.page_content)
+            start_page = _page_at_offset(breaks, start_idx, entry)
+            end_page   = _page_at_offset(breaks, end_idx,   start_page)
+
+            clean_text = _remove_markers(fine_doc.page_content)
+            if not clean_text:
+                continue
+
+            heading_meta = {
+                "parent_h1": fine_doc.metadata.get("parent_h1", ""),
+                "parent_h2": fine_doc.metadata.get("parent_h2", ""),
+                "parent_h3": fine_doc.metadata.get("parent_h3", ""),
+            }
+            meta = {
+                **heading_meta,
+                "heading_path": _heading_path(heading_meta),
+                "start_page":   start_page,
+                "end_page":     end_page,
+                "section":      section_for_page(start_page),
+            }
+            chunks.append({
+                "text":     clean_text,
+                "embed":    _enrich_text(clean_text, meta),
+                "metadata": meta,
+            })
+
+        # Advance entry page to the last page seen in this header section
+        if breaks:
+            current_entry_page = breaks[-1][1]
+
+    return chunks
+
 
 def ingest():
-    pages_data = parse_pdf_to_items()
-    chunks     = build_chunks(pages_data)
+    print("Parsing PDF with LlamaParse (agentic)...")
+    pages = parse_pdf()
+    print(f"  {len(pages)} pages")
 
-    print("Initializing ChromaDB...")
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    chunks = build_chunks(pages)
+    print(f"  {len(chunks)} chunks")
+
+    db = chromadb.PersistentClient(path=CHROMA_DIR)
     try:
-        client.delete_collection(COLLECTION_NAME)
+        db.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
-    collection = client.create_collection(
+    collection = db.create_collection(
         name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},
     )
 
-    print("Embedding and storing chunks...")
-    batch_size = 64
+    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
 
+    batch_size = 100
     for i in range(0, len(chunks), batch_size):
-        batch      = chunks[i : i + batch_size]
-        texts      = [c["text"]     for c in batch]
-        metas      = [c["metadata"] for c in batch]
-        ids        = [f"chunk_{i + j}" for j in range(len(batch))]
-        embeddings = _embedder.encode(texts, show_progress_bar=False).tolist()
+        batch  = chunks[i : i + batch_size]
+        texts  = [c["embed"]    for c in batch]
+        embeds = [c["embed"]    for c in batch]
+        metas  = [c["metadata"] for c in batch]
+        ids    = [f"chunk_{i + j}" for j in range(len(batch))]
+        vecs   = model.encode(embeds, normalize_embeddings=True).tolist()
+        collection.add(ids=ids, documents=texts, metadatas=metas, embeddings=vecs)
+        print(f"  Stored {min(i + len(batch), len(chunks))}/{len(chunks)}")
 
-        collection.add(
-            ids=ids,
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=metas,
-        )
-        stored = i + len(batch)
-        if stored % 200 == 0 or stored == len(chunks):
-            print(f"  Stored {stored}/{len(chunks)} chunks")
-
-    print(f"Ingest complete. {collection.count()} chunks in ChromaDB.")
+    print(f"Done — {collection.count()} chunks in ChromaDB.")
 
 
 if __name__ == "__main__":
