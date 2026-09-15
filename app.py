@@ -217,7 +217,7 @@ for msg in st.session_state.messages:
                 for chunk in msg["context"]:
                     st.markdown(
                         f'<span class="source-chip">Page {chunk.get("start_page") or chunk["metadata"].get("start_page", "?")}</span>'
-                        f'<span class="source-chip">{chunk["metadata"]["section_type"]}</span>'
+                        f'<span class="source-chip">{chunk["metadata"].get("section", "")}</span>'
                         f'<span class="source-chip">score {chunk["score"]}</span>',
                         unsafe_allow_html=True
                     )
@@ -247,7 +247,7 @@ if prompt:
                 for chunk in chunks:
                     st.markdown(
                         f'<span class="source-chip">Page {chunk.get("start_page") or chunk["metadata"].get("start_page", "?")}</span>'
-                        f'<span class="source-chip">{chunk["metadata"]["section_type"]}</span>'
+                        f'<span class="source-chip">{chunk["metadata"].get("section", "")}</span>'
                         f'<span class="source-chip">score {chunk["score"]}</span>',
                         unsafe_allow_html=True
                     )
