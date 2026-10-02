@@ -67,18 +67,10 @@ def root():
 
 @app.post("/ask", response_model=AskResponse)
 def ask_question(request: AskRequest):
-    from rag import ask
-    from retriever import Retriever
+    import rag
 
-    retriever = Retriever()
-    chunks = retriever.retrieve(request.query)
-    if not chunks:
-        return AskResponse(
-            answer="I couldn't find relevant information for that question.",
-            sources=[],
-        )
-    answer = ask(request.query, student_profile=request.student_profile)
-    return AskResponse(answer=answer, sources=chunks)
+    text, sources = rag.answer(request.query, request.student_profile)
+    return AskResponse(answer=text, sources=sources)
 
 
 @app.post("/upload-transcript")

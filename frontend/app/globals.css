@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ── Light theme ─────────────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --bg: #F8F5F2;
+  --surface: #FFFFFF;
+  --surface-elevated: #F2EDE9;
+  --border: #E8E0DA;
+  --text-primary: #1A1412;
+  --text-secondary: #7A6E6A;
+  --maroon: #822433;
+  --maroon-dark: #681C29;
+  --maroon-text: #822433;
+  --maroon-subtle: rgba(130, 36, 51, 0.08);
+  --shadow-sm: 0 1px 3px rgba(26,20,18,0.08), 0 1px 2px rgba(26,20,18,0.04);
+  --shadow-md: 0 4px 12px rgba(26,20,18,0.10), 0 2px 4px rgba(26,20,18,0.06);
+}
+
+/* ── Dark theme ──────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg: #151213;
+  --surface: #1B1718;
+  --surface-elevated: #211B1D;
+  --border: #342A2D;
+  --text-primary: #F5EEEE;
+  --text-secondary: #A99DA0;
+  --maroon: #822433;
+  --maroon-dark: #681C29;
+  --maroon-text: #A94A5B;
+  --maroon-subtle: rgba(130, 36, 51, 0.15);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.25);
+}
+
+/* ── Base ────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), -apple-system, Arial, sans-serif;
+  transition: background 200ms ease, color 200ms ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* ── Focus rings ─────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--maroon);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Reduced motion ──────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Animations ──────────────────────────────────────────── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dotBounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40%           { transform: translateY(-5px); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-fade-in {
+  animation: fadeSlideIn 180ms ease both;
+}
+
+.dot-bounce {
+  animation: dotBounce 1.2s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin 1s linear infinite;
+}

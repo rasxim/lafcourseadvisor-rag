@@ -1,202 +1,193 @@
+"""Answer generation over retrieved catalog units."""
+
 import json
 import os
-import re
-from pathlib import Path
+import time
+
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
-from retriever import Retriever
+from google.genai import errors, types
+
+from retriever import Retrieval, Retriever
 
 load_dotenv()
 
-_client    = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 _retriever = Retriever()
 
-STUDENT_PROFILE: dict = json.loads(
-    Path("student_profile.json").read_text(encoding="utf-8")
-)
-
 MODEL = "gemini-3.6-flash"
+MAX_SOURCE_CHARS = 2000
 
-OFF_TOPIC_REPLY = (
-    "I can only help with Lafayette academic and degree planning questions."
+NO_CONTEXT_REPLY = (
+    "I couldn't find anything in the Lafayette catalog for that. Try asking about a "
+    "specific course, major, minor, or academic policy."
 )
+
+_SECTION_BY_TYPE = {
+    "course": "course_description",
+    "program": "major_requirements",
+    "department": "major_requirements",
+    "policy": "academic_policy",
+    "other": "other",
+}
 
 SYSTEM_PROMPT = """\
-You are an AI academic advisor for Lafayette College.
+You are an academic advisor for Lafayette College.
 
-Your purpose is to answer questions about Lafayette College academic policies,
-degree requirements, majors, minors, graduation requirements, courses,
-prerequisites, registration rules, and the student's academic progress.
+You answer questions about Lafayette's courses, majors, minors, degree
+requirements, prerequisites, academic policies, and a student's own progress
+toward their degree.
 
-You will receive:
-1. Relevant excerpts from the Lafayette College catalog (retrieved context).
-2. Optionally, the student's degree audit (only for student-specific questions).
-3. The user's question.
+## Sources
 
-## Source Rules
+The numbered catalog sources you are given are your ONLY authority on what
+Lafayette requires. Never use outside knowledge about Lafayette. If the sources
+don't cover something, say so plainly instead of guessing.
 
-The retrieved catalog excerpts are the ONLY authoritative source for
-academic policies, course descriptions, and degree requirements.
+The student profile, when present, tells you what the student has already
+completed. Use it to personalize your answer — never as evidence for what the
+requirements are. Requirements come only from the catalog sources.
 
-NEVER use outside knowledge about Lafayette College. If a fact about
-Lafayette is not present in the retrieved catalog excerpts, treat it as
-unknown and say so.
+Cite sources inline with bracketed numbers matching the source you used, like
+[1] or [2][3]. Cite the specific source a claim comes from, not everything.
 
-The student profile is provided only to personalize answers about the
-student's own academic progress. Do NOT use the student profile as
-evidence for what requirements exist — always derive requirements
-exclusively from the catalog excerpts.
+## Course planning
 
-If the retrieved context is insufficient to answer the question
-confidently, say so explicitly rather than guessing or inferring.
+When the student asks what to take, or about adding a major or minor, work
+through it in order:
 
-## Answering Rules
+1. State the requirements from the catalog sources.
+2. Compare them against what the student has already completed.
+3. List what is still outstanding.
+4. Recommend specific courses they are eligible for now — check the prerequisite
+   reference and do not recommend a course whose prerequisites they haven't met.
+5. Note any policy limits that apply, such as how many courses may be shared
+   between two majors.
 
-- Base every factual claim ONLY on the retrieved catalog excerpts.
-- Do not invent or infer policies, prerequisites, or requirements.
-- Cite page numbers inline when making factual claims, e.g. (p. 45).
-- If multiple retrieved passages disagree, acknowledge the ambiguity.
-- If information is incomplete, explain exactly what is missing.
+If something material is missing (their class year, a requirement the catalog
+doesn't spell out), say what you'd need rather than assuming.
 
-## Student-Specific Questions
+## Style
 
-For questions about the student's own degree progress (remaining courses,
-graduation status, requirements met, course planning, etc.), reason in order:
+Be direct and specific. Use short paragraphs, bullets for lists, and always give
+course codes. Lead with the answer, then the reasoning. Don't pad.
 
-1. Identify the relevant requirement from the catalog excerpts.
-2. Compare it with the student's profile (completed courses, credits, GPA, etc.).
-3. Explain the reasoning step by step.
-4. State the conclusion clearly.
-
-## Course Questions
-
-When discussing a course:
-- Always include the course code.
-- Mention prerequisites if present in the retrieved context.
-- Distinguish between required and elective.
-- Explain why the course is relevant to the question.
-
-## Policy Questions
-
-- Explain the rule clearly and directly.
-- Note important exceptions if present in the retrieved context.
-- Avoid adding detail not found in the retrieved passages.
-
-## Formatting
-
-- Prefer short, well-organized answers.
-- Use bullet points when listing multiple items.
-- When possible, end with a Sources section:
-
-Sources:
-- p. X – [brief description]
-- p. Y – [brief description]
-
-## Off-topic Questions
-
-Only answer questions about:
-- Lafayette academics, majors, and minors
-- Graduation and degree requirements
-- Course planning and prerequisites
-- Academic policies and registration
-- The student's degree progress
-
-For any other topic, respond ONLY with:
+Only answer questions about Lafayette academics. For anything else, reply:
 "I can only help with Lafayette academic and degree planning questions."
 """
 
-# Patterns that indicate a question is about the student's own academic situation.
-# When matched, the student profile is included in the prompt.
-_STUDENT_RE = re.compile(
-    r"\b(my |i |i'm |i've |i need|i still|am i\b|do i\b|have i\b|will i\b|"
-    r"remaining|still need|on track|my major|my course|my degree|"
-    r"my progress|my plan|my graduation|my transcript)\b",
-    re.IGNORECASE,
+
+def build_context(retrieval: Retrieval) -> tuple[str, list[dict]]:
+    """Render retrieved units as numbered sources for the prompt and the API."""
+    blocks: list[str] = []
+    sources: list[dict] = []
+
+    for n, hit in enumerate(retrieval.hits, 1):
+        u = hit.unit
+        pages = str(u["start_page"]) if u["start_page"] == u["end_page"] else f"{u['start_page']}–{u['end_page']}"
+        label = u["name"]
+        if u["type"] == "program" and u.get("kind"):
+            label = f"{label} [{u['kind']}]"
+
+        blocks.append(f"[{n}] {label} (pages {pages})\n{u['text']}")
+        sources.append(
+            {
+                "text": u["text"][:MAX_SOURCE_CHARS],
+                "score": hit.score,
+                "start_page": u["start_page"],
+                "end_page": u["end_page"],
+                "heading_path": f"{u['h1']} > {u['name']}" if u.get("h1") else u["name"],
+                "section": _SECTION_BY_TYPE.get(u["type"], "other"),
+                "metadata": {"unit_id": u["id"], "unit_type": u["type"], "reason": hit.reason},
+            }
+        )
+
+    if retrieval.digest:
+        n = len(blocks) + 1
+        lo, hi = retrieval.digest_pages
+        blocks.append(
+            f"[{n}] Prerequisite reference for courses named above (pages {lo}–{hi})\n"
+            f"{retrieval.digest}"
+        )
+        sources.append(
+            {
+                "text": retrieval.digest[:MAX_SOURCE_CHARS],
+                "score": 1.0,
+                "start_page": lo,
+                "end_page": hi,
+                "heading_path": "Courses > Prerequisite reference",
+                "section": "course_description",
+                "metadata": {"unit_id": "digest", "unit_type": "digest", "reason": "prerequisites for referenced courses"},
+            }
+        )
+
+    return "\n\n---\n\n".join(blocks), sources
+
+
+def build_prompt(query: str, context: str, profile: dict | None, intent: str) -> str:
+    parts = []
+    if profile:
+        parts.append(f"## Student Profile\n```json\n{json.dumps(profile, indent=2)}\n```")
+    parts.append(f"## Catalog Sources\n{context}")
+    if intent == "planning":
+        parts.append(
+            "## Task\nThis is a planning question. Compare the requirements against what "
+            "the student has completed, and recommend only courses whose prerequisites they meet."
+        )
+    parts.append(f"## Question\n{query}")
+    return "\n\n".join(parts)
+
+
+RETRY_CODES = (429, 500, 502, 503)
+RETRY_DELAYS = (1, 3, 7, 15)
+
+BUSY_REPLY = (
+    "The model is temporarily unavailable (Gemini is reporting high demand). "
+    "Your question and the catalog sources were retrieved fine — please try again in a moment."
 )
 
 
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
-
-def is_student_specific_query(query: str) -> bool:
-    """True when the query is about the student's personal academic situation."""
-    return bool(_STUDENT_RE.search(query))
-
-
-def build_catalog_context(chunks: list[dict]) -> str:
-    """Format retrieved chunks into a numbered, structured context block."""
-    parts = []
-    for i, c in enumerate(chunks, 1):
-        hp      = c.get("heading_path", "")
-        section = c.get("section", "")
-        sp      = c.get("start_page", "?")
-        ep      = c.get("end_page",   "?")
-        pages   = str(sp) if sp == ep else f"{sp}–{ep}"
-
-        header = f"Source {i}"
-        if hp:
-            header += f"\nHeading: {hp}"
-        header += f"\nSection: {section}"
-        header += f"\nPages: {pages}"
-
-        parts.append(f"{header}\n\nContent:\n{c['text']}")
-
-    return "\n\n---\n\n".join(parts)
-
-
-def build_prompt(query: str, chunks: list[dict], student_profile: dict | None = None) -> str:
-    """Assemble the user-turn prompt, including the student profile only when
-    the query is student-specific."""
-    sections: list[str] = []
-
-    profile = student_profile if student_profile is not None else STUDENT_PROFILE
-    if is_student_specific_query(query):
-        sections.append(
-            "## Student Degree Audit\n"
-            f"```json\n{json.dumps(profile, indent=2)}\n```"
-        )
-
-    sections.append(
-        f"## Relevant Catalog Excerpts\n{build_catalog_context(chunks)}"
-    )
-
-    sections.append(f"## Question\n{query}")
-
-    return "\n\n".join(sections)
-
-
 def generate_answer(prompt: str) -> str:
-    """Send the assembled prompt to the LLM and return the raw response text."""
-    response = _client.models.generate_content(
-        model=MODEL,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.0,
-        ),
-        contents=prompt,
-    )
-    return response.text.strip()
+    """Call the model, retrying transient server errors with backoff.
+
+    Gemini's free tier returns 503 under load often enough that a demo needs to
+    ride it out rather than surface a stack trace.
+    """
+    for attempt, delay in enumerate(RETRY_DELAYS + (None,)):
+        try:
+            response = _client.models.generate_content(
+                model=MODEL,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.0,
+                ),
+                contents=prompt,
+            )
+            return (response.text or "").strip()
+        except errors.APIError as e:
+            if getattr(e, "code", None) not in RETRY_CODES or delay is None:
+                if getattr(e, "code", None) in RETRY_CODES:
+                    return BUSY_REPLY
+                raise
+            time.sleep(delay)
+    return BUSY_REPLY
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+def answer(query: str, student_profile: dict | None = None) -> tuple[str, list[dict]]:
+    """Retrieve once, answer once. Returns (answer_text, sources)."""
+    profile = student_profile or None
+    retrieval = _retriever.retrieve(query, profile)
+    if not retrieval.hits:
+        return NO_CONTEXT_REPLY, []
 
-def ask(query: str, student_profile: dict | None = None) -> str:
-    chunks = _retriever.retrieve(query)
-    if not chunks:
-        return OFF_TOPIC_REPLY
-    prompt = build_prompt(query, chunks, student_profile=student_profile)
-    return generate_answer(prompt)
+    context, sources = build_context(retrieval)
+    prompt = build_prompt(query, context, profile, retrieval.intent)
+    return generate_answer(prompt), sources
 
 
 if __name__ == "__main__":
-    test_queries = [
-        "What is the pre requisite for CS 303?"
-    ]
-    for q in test_queries:
-        print(f"\nQ: {q}")
-        print(f"A: {ask(q)}")
-        print("-" * 60)
+    import sys
+
+    q = " ".join(sys.argv[1:]) or "What is the prerequisite for CS 203?"
+    text, srcs = answer(q)
+    print(f"Q: {q}\n\n{text}\n\nSources: {[s['heading_path'] for s in srcs]}")

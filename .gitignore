@@ -31,3 +31,7 @@ z
 
 # Claude Code local settings
 .claude/
+
+# Personal degree audit - never commit
+backend/student_profile.json
+student_profile.json
