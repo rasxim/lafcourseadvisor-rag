@@ -28,7 +28,7 @@ SEMANTIC_MIN_SIM = 0.25
 MAX_DIGEST_LINES = 70
 MAX_SEMANTIC_CHARS = 5000
 
-COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{2,5})\s?-?(\d{3})\b")
+COURSE_CODE_RE = re.compile(r"\b([A-Za-z][A-Za-z&]{1,4})\s?-?(\d{3})\b")
 
 _STOPWORDS = {"and", "of", "the", "in", "a", "an", "s", "for", "to", "with"}
 

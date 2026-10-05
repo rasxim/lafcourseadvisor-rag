@@ -29,7 +29,12 @@ INDEX_DIR = HERE / "index"
 CHUNK_COLLECTION = "catalog_chunks"
 
 COURSE_HEADING_RE = re.compile(
-    r"^(?P<dept>[A-Z]{2,5})\s+(?P<num>\d{3})(?:\s*-\s*(?P<num2>\d{3}))?\s*[-–]\s*(?P<title>.+?)\s*(?:\((?P<credits>[^)]*)\))?\s*$"
+    r"^(?P<dept>[A-Z][A-Z&]{1,4})\s+(?P<num>\d{3})(?:\s*-\s*(?P<num2>\d{3}))?\s*[-–]\s*(?P<title>.+?)\s*(?:\((?P<credits>[^)]*)\))?\s*$"
+)
+# Department header in the Courses section, e.g. "CS - COMPUTER SCIENCE". The
+# parser sometimes fused it onto the first course ("CHEM - CHEMISTRY CHEM 101 - ...").
+DEPT_HEADING_RE = re.compile(
+    r"^(?P<code>[A-Z][A-Z&]{1,4})\s+-\s+(?P<name>[^a-z0-9]+?)\s*(?:$|(?=(?P=code)\s+\d{3}))"
 )
 PREFIX_RE = re.compile(r"^(Section|Subsection|Topic): ")
 
@@ -130,6 +135,9 @@ def unit_key(meta: dict) -> tuple[str, str]:
 
     if h1 == "Courses":
         deepest = h3 or h2
+        m = DEPT_HEADING_RE.match(deepest)
+        if m and m.end() < len(deepest):
+            deepest = deepest[m.end():]
         if COURSE_HEADING_RE.match(deepest):
             return "course", deepest
         return "other", f"Courses > {deepest}" if deepest else "Courses"
@@ -156,6 +164,16 @@ def main() -> None:
         key=lambda r: int(r[0].split("_")[1]),
     )
     print(f"Read {len(rows)} chunks from '{SOURCE_COLLECTION}'")
+
+    # Course code prefix -> department name, from the Courses section headers.
+    # The parser dropped the MUS and PHYS headers entirely, so seed those.
+    course_depts: dict[str, str] = {"MUS": "MUSIC", "PHYS": "PHYSICS"}
+    for _, _, meta in rows:
+        if meta.get("parent_h1") == "Courses":
+            for h in (meta.get("parent_h2", ""), meta.get("parent_h3", "")):
+                m = DEPT_HEADING_RE.match(h or "")
+                if m:
+                    course_depts[m.group("code")] = m.group("name")
 
     units: list[dict] = []
     chunk_unit: dict[str, str] = {}
@@ -202,6 +220,7 @@ def main() -> None:
             elif num2:
                 codes.append(f"{dept} {num2}")
             u["codes"] = codes
+            u["dept_context"] = course_depts.get(dept, "")
             u["title"] = m.group("title").strip()
             prereq = re.findall(r"((?:Prerequisites?|Corequisites?|Pre-?requisites?)[^.]*\.)", u["text"], re.I)
             u["prereq"] = " ".join(p.strip() for p in prereq)

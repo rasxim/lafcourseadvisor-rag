@@ -1,6 +1,6 @@
 # Lafayette Course Advisor
 
-An AI-powered academic advisor that answers degree planning questions for Lafayette College students. Ask it anything — prerequisites, remaining requirements, major policies, course descriptions — and it reasons over the official 2025–26 course catalog combined with your personal degree audit.
+An AI academic advisor for Lafayette College students. Ask it about prerequisites, majors, minors, academic policies, or your own degree progress. It answers using the official 2025–26 course catalog, personalized with your degree audit.
 
 ---
 
@@ -8,25 +8,26 @@ An AI-powered academic advisor that answers degree planning questions for Lafaye
 
 Lafayette College doesn't have a conversational tool for degree planning. The registrar's catalog is a 213-page PDF. Academic advisors are busy. Students planning four years of coursework are left manually cross-referencing dense tables of requirements.
 
-I built this for myself. As a CS student (Class of 2029), I needed a way to ask plain-English questions like *"What CS courses do I still need to graduate?"* and get answers grounded in the actual catalog — not hallucinated by a general-purpose LLM.
+I built this for myself. As a CS student (Class of 2029), I wanted to ask plain-English questions like *"What CS courses do I still need to graduate?"* and get answers grounded in the actual catalog, not made up by a general-purpose LLM.
 
-The project became an exercise in building a production-quality RAG pipeline from scratch: parsing a complex structured PDF, designing a retrieval system that actually works on real academic queries, and evaluating it rigorously with automated metrics.
+The project became an exercise in building a production-quality RAG pipeline from scratch. That meant parsing a complex, structured PDF, designing retrieval that actually works on real academic questions, and evaluating it with automated metrics.
 
 ---
 
 ## What It Does
 
-- Answers questions about course prerequisites, major requirements, graduation policies, and minors
-- Personalizes answers using the student's degree audit (completed courses, GPA, credits, in-progress courses)
-- Cites exact page numbers from the catalog for every factual claim
-- Rejects off-topic questions cleanly
-- Runs as a full-stack Streamlit web app
+- Answers questions about course prerequisites, major and minor requirements, and academic policies
+- Personalizes answers from an uploaded degree audit PDF (completed and in-progress courses, GPA, credits)
+- Plans coursework: compares requirements against what you've taken and recommends only courses whose prerequisites you've met
+- Picks the right requirement variant for your class year and degree (e.g. "Class of 2028 and Beyond", B.S. vs A.B.)
+- Cites its sources inline, with page numbers you can open in the UI
+- Declines off-topic questions
 
 **Example queries:**
-- *"What are the prerequisites for CS 301?"*
+- *"What are the prerequisites for CS 203?"*
 - *"What CS courses do I still need to graduate?"*
+- *"Can I double major in CS and Economics? What would I need?"*
 - *"What courses count toward the Documentary Storymaking minor?"*
-- *"What are the prerequisites for MATH 182?"*
 
 ---
 
@@ -36,32 +37,35 @@ The project became an exercise in building a production-quality RAG pipeline fro
 PDF Catalog
     │
     ▼
-LlamaParse (Agentic Tier)
-    │  Converts 213-page PDF to structured per-page markdown
-    │  Preserves headings, tables, and course entries
+LlamaParse (agentic tier)                         ingest.py  (one-time)
+    │  213-page PDF → per-page markdown with headings and tables
     ▼
-Chunking Pipeline (LangChain)
-    │  MarkdownHeaderTextSplitter → splits on H1/H2/H3 boundaries
-    │  RecursiveCharacterTextSplitter → max 800 chars, 150 overlap
-    │  Page markers embedded for accurate page-number citation
-    │  Heading context prepended to each chunk for richer embeddings
+Heading-aware chunking → ChromaDB  (backend/chroma_db, ~2,500 chunks)
+    │
     ▼
-ChromaDB (Local Vector Store)
-    │  ~1,500 chunks, cosine similarity space
-    │  Each chunk stores: text, heading path, page range, section type
+Unit builder                                      build_index.py
+    │  Stitches chunks back into whole catalog units:
+    │  1,448 courses · 125 programs · 101 policies · 44 departments
+    │  Extracts course codes, prerequisites, department, program kind,
+    │  degree (B.S./A.B.) and class-year window
+    │  Re-embeds the chunks with ONNX MiniLM (no PyTorch) for semantic fallback
     ▼
-Retriever
-    │  Query classification → routes to course_description / major_requirements / academic_policy
-    │  Keyword search ($contains) for exact course codes — guarantees correct course is found
-    │  Bi-encoder (BAAI/bge-small-en-v1.5) → semantic candidate retrieval
-    │  CrossEncoder (BAAI/bge-reranker-base) → reranks candidates for precision
-    │  Course code boost → +0.5 score for chunks containing the exact queried course
+backend/index/  (units.json + chroma/)
+    │
     ▼
-Gemini 3.6 Flash (LLM)
-    │  System prompt enforces: catalog-only sourcing, page citations, no hallucination
-    │  Student profile injected only for student-specific queries
+Rule-based router                                 retriever.py
+    │  1. Course codes   → exact course lookup ("CS 203", "A&S 202")
+    │  2. Program names  → the whole program, right class-year / degree variant
+    │                      (handles shorthand: "cs", "econ", "math-econ")
+    │  3. Planning       → student's major + target programs + relevant policies
+    │                      + a prerequisite digest for every course they list
+    │  4. Otherwise      → semantic search over chunks, expanded to parent units
     ▼
-Streamlit Frontend
+Gemini 3.6 Flash                                  rag.py
+    │  Catalog sources are the only authority; profile is used only to personalize
+    │  Inline [n] citations; refuses off-topic questions
+    ▼
+FastAPI  (main.py)  ──►  Next.js frontend  (frontend/)
 ```
 
 ---
@@ -69,19 +73,24 @@ Streamlit Frontend
 ## Key Design Decisions
 
 ### Why LlamaParse over a simple PDF parser?
-The Lafayette catalog mixes narrative prose, requirement tables, and course entries on the same pages. Libraries like `pdfplumber` or `PyMuPDF` lose heading structure entirely. LlamaParse's agentic tier preserves the markdown hierarchy (`## CS 301 - Principles of Programming Languages`) which is what makes heading-boundary chunking possible.
+The catalog mixes narrative prose, requirement tables, and course entries on the same pages. Libraries like `pdfplumber` or `PyMuPDF` lose the heading structure entirely. LlamaParse's agentic tier keeps the markdown hierarchy (`## CS 301 - Principles of Programming Languages`), and everything downstream is built on that hierarchy.
 
-### Why heading-boundary chunking?
-Splitting by character count alone would cut a course entry mid-sentence, separating the prerequisite line from the course description. Splitting first on H2/H3 headings keeps each course entry intact as one logical unit, then the character splitter handles long sections.
+### Why whole units instead of fixed-size chunks?
+The first version retrieved 800-character chunks with a bi-encoder and CrossEncoder reranker. It worked for single-course lookups but failed on the questions students actually ask. A major's requirements span several chunks, so the retriever returned fragments, the model missed requirements, and the class-year variants (*"Class of 2026 and 2027"* vs *"Class of 2028 and Beyond"*) got mixed together.
 
-### Why BAAI/bge-small-en-v1.5 + CrossEncoder reranking?
-Single-stage dense retrieval (one embedding model) struggles with academic queries where the query mentions a course code but the chunk body doesn't repeat it — the heading carries the course code, not the paragraph. The two-stage approach fixes this: the bi-encoder casts a wide net, the CrossEncoder reads both query and chunk jointly to accurately score relevance.
+The catalog is already organized into natural units: one course, one program, one policy section. Indexing those whole units means the model always sees a complete requirement list or course entry, never a fragment.
 
-### Why keyword search for course codes?
-`"What are the prerequisites for CS 303?"` — the semantically similar chunk is titled `## CS 303 - Theory of Computation` but its body starts with `"An introduction to formal models..."`. Cosine similarity between the query and this chunk is low. A `$contains: "CS 303"` search on document text directly finds the right chunk regardless of semantic drift. Course code queries now always return the correct course entry.
+### Why a rule-based router?
+Most questions name something precise: a course code, a program, or "my major". A deterministic router resolves those exactly. It is faster and more reliable than embedding similarity, and you can debug it: each hit records *why* it was retrieved. Semantic search is only the fallback for questions that don't name anything.
+
+### Why the prerequisite digest?
+For planning questions, the model needs to know the prerequisites of every course in a program, not just the requirement list. The retriever attaches a compact one-line-per-course prerequisite reference, so the model can check eligibility without pulling in hundreds of full course descriptions.
+
+### Why ONNX MiniLM instead of sentence-transformers?
+Semantic search is now only a fallback, so a small model is enough. ChromaDB's bundled ONNX embedder removes PyTorch from the backend, which shrinks the deploy and speeds up cold starts.
 
 ### Why Gemini 3.6 Flash?
-Fast, free tier, 1,500 requests/day — sufficient for a development and demo workload. The system prompt is strict: the model must base every claim on the retrieved catalog excerpts, cite page numbers, and refuse to infer policies not present in context.
+It's fast, and the free tier is enough for development and demo traffic. The system prompt is strict: every claim must come from the numbered catalog sources, and the student profile is never treated as evidence of what the requirements are.
 
 ---
 
@@ -93,10 +102,12 @@ The pipeline is evaluated with [DeepEval](https://github.com/confident-ai/deepev
 |---|---|
 | **Faithfulness** | Are all claims in the answer supported by the retrieved context? |
 | **Answer Relevancy** | Does the answer actually address the question asked? |
-| **Contextual Precision** | Are the retrieved chunks relevant to the question? |
+| **Contextual Precision** | Is the retrieved context relevant to the question? |
 | **Contextual Recall** | Does the retrieved context contain the information needed to answer? |
 
-A golden dataset of 18 test cases covers: exact course lookups, broad requirement queries, student-specific degree gap queries, off-topic rejection, and edge cases (excluded courses, GPA calculation).
+A golden dataset of 20 test cases covers exact course lookups, broad requirement queries, student-specific degree-gap queries, off-topic rejection, and edge cases (excluded courses, GPA calculation).
+
+> **Note:** the eval scripts in `backend/eval/` still target the old chunk-based interface (`rag.ask`) and need updating for the unit-based retriever.
 
 ---
 
@@ -104,57 +115,94 @@ A golden dataset of 18 test cases covers: exact course lookups, broad requiremen
 
 | Component | Technology |
 |---|---|
-| PDF Parsing | LlamaParse (Agentic Tier) |
-| Chunking | LangChain `MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter` |
-| Vector Store | ChromaDB (local persistent) |
-| Bi-Encoder | `BAAI/bge-small-en-v1.5` (Sentence Transformers) |
-| Cross-Encoder | `BAAI/bge-reranker-base` |
+| PDF parsing | LlamaParse (agentic tier) |
+| Retrieval | Unit index + rule-based router (`units.json`) |
+| Semantic fallback | ChromaDB with ONNX `all-MiniLM-L6-v2` |
 | LLM | Gemini 3.6 Flash (`google-genai`) |
-| Frontend | Streamlit |
+| Transcript parsing | LlamaParse + Gemini (structured JSON extraction) |
+| Backend | FastAPI + Uvicorn |
+| Frontend | Next.js 16, React 19, Tailwind CSS 4 |
 | Evaluation | DeepEval |
+
+---
+
+## API
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | Health check |
+| `POST /ask` | `{ query, student_profile }` → `{ answer, sources }` |
+| `POST /upload-transcript` | Degree audit PDF (multipart) → student profile JSON |
 
 ---
 
 ## Setup
 
+### Backend
+
 ```bash
-# Install dependencies
+cd backend
 pip install -r requirements.txt
 
-# Add your API keys to .env
+# backend/.env
 GEMINI_API_KEY=your_key_here
 LLAMA_CLOUD_API_KEY=your_key_here
 
-# Ingest the catalog (builds ChromaDB)
-python ingest.py
-
-# Run the app
-streamlit run app.py
+uvicorn main:app --reload        # http://127.0.0.1:8000
 ```
 
-The `chroma_db/` directory is committed to the repo — you can skip `ingest.py` and run the app directly if you clone the repo.
+The built index (`backend/index/`) is committed, so a fresh clone can run the API right away.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev                      # http://localhost:3000
+```
+
+Set `NEXT_PUBLIC_API_URL` if the backend isn't at `http://127.0.0.1:8000`.
+
+### Rebuilding the index
+
+Only needed if you change how units are built:
+
+```bash
+cd backend
+python build_index.py            # reads chroma_db/, writes index/
+```
+
+Re-parsing the catalog from the PDF (`python ingest.py`) needs the source PDF plus the ingestion dependencies in the root `requirements.txt` (sentence-transformers, langchain-text-splitters). The deployed backend doesn't need these.
 
 ---
 
 ## Project Structure
 
 ```
-├── ingest.py          # PDF parsing, chunking, embedding, ChromaDB ingestion
-├── retriever.py       # Query classification, bi-encoder + CrossEncoder retrieval
-├── rag.py             # Prompt assembly, Gemini LLM call, public ask() interface
-├── app.py             # Streamlit frontend
-├── student_profile.json   # Degree audit (completed courses, requirements, GPA)
-├── eval/
-│   ├── golden_dataset.json    # 18 hand-written test cases
-│   ├── quick_eval.py          # Single-query eval (~5 API calls)
-│   └── run_eval.py            # Full eval suite
-└── chroma_db/         # Pre-built vector store (committed for convenience)
+├── backend/
+│   ├── main.py              # FastAPI app: /ask, /upload-transcript
+│   ├── rag.py               # Context assembly, system prompt, Gemini call
+│   ├── retriever.py         # Unit index loading + rule-based router
+│   ├── build_index.py       # Builds units.json and the chunk index
+│   ├── ingest.py            # One-time PDF → LlamaParse → ChromaDB ingestion
+│   ├── index/               # Built index used at runtime (committed)
+│   ├── chroma_db/           # Original parsed chunks; source for build_index.py
+│   ├── eval/
+│   │   ├── golden_dataset.json   # 20 hand-written test cases
+│   │   ├── quick_eval.py         # Single-query eval
+│   │   └── run_eval.py           # Full eval suite
+│   ├── requirements.txt
+│   └── Procfile             # uvicorn main:app for deployment
+└── frontend/
+    └── app/
+        ├── page.tsx
+        └── components/      # Chat shell, sidebar, sources drawer, transcript upload
 ```
 
 ---
 
 ## About
 
-Built by **Mohammad Rasim Omer** — CS BS, Lafayette College, Class of 2029.
+Built by **Mohammad Rasim Omer**, CS BS, Lafayette College, Class of 2029.
 
 > This project solves a real problem I have as a student. Every design decision was made to improve answer quality on actual academic queries, not to add complexity.
