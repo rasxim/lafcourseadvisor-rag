@@ -107,7 +107,14 @@ The pipeline is evaluated with [DeepEval](https://github.com/confident-ai/deepev
 
 A golden dataset of 20 test cases covers exact course lookups, broad requirement queries, student-specific degree-gap queries, off-topic rejection, and edge cases (excluded courses, GPA calculation).
 
-> **Note:** the eval scripts in `backend/eval/` still target the old chunk-based interface (`rag.ask`) and need updating for the unit-based retriever.
+```bash
+cd backend
+pip install deepeval
+python eval/quick_eval.py          # one query, all four metrics
+python eval/run_eval.py            # full golden dataset (or pass test ids)
+```
+
+The judge is the app's own Gemini model. A full run makes 100+ requests, which is more than Gemini's free tier allows in a day.
 
 ---
 
@@ -188,6 +195,7 @@ Re-parsing the catalog from the PDF (`python ingest.py`) needs the source PDF pl
 │   ├── index/               # Built index used at runtime (committed)
 │   ├── chroma_db/           # Original parsed chunks; source for build_index.py
 │   ├── eval/
+│   │   ├── common.py             # Gemini judge, metrics, pipeline runner
 │   │   ├── golden_dataset.json   # 20 hand-written test cases
 │   │   ├── quick_eval.py         # Single-query eval
 │   │   └── run_eval.py           # Full eval suite

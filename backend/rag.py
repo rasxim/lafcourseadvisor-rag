@@ -17,6 +17,7 @@ _retriever = Retriever()
 
 MODEL = "gemini-3.6-flash"
 MAX_SOURCE_CHARS = 2000
+CONTEXT_SEPARATOR = "\n\n---\n\n"
 
 NO_CONTEXT_REPLY = (
     "I couldn't find anything in the Lafayette catalog for that. Try asking about a "
@@ -121,7 +122,7 @@ def build_context(retrieval: Retrieval) -> tuple[str, list[dict]]:
             }
         )
 
-    return "\n\n---\n\n".join(blocks), sources
+    return CONTEXT_SEPARATOR.join(blocks), sources
 
 
 def build_prompt(query: str, context: str, profile: dict | None, intent: str) -> str:
@@ -173,16 +174,22 @@ def generate_answer(prompt: str) -> str:
     return BUSY_REPLY
 
 
-def answer(query: str, student_profile: dict | None = None) -> tuple[str, list[dict]]:
-    """Retrieve once, answer once. Returns (answer_text, sources)."""
+def answer_with_context(query: str, student_profile: dict | None = None) -> tuple[str, list[dict], list[str]]:
+    """Like answer(), but also returns the full source blocks the model saw (for eval)."""
     profile = student_profile or None
     retrieval = _retriever.retrieve(query, profile)
     if not retrieval.hits:
-        return NO_CONTEXT_REPLY, []
+        return NO_CONTEXT_REPLY, [], []
 
     context, sources = build_context(retrieval)
     prompt = build_prompt(query, context, profile, retrieval.intent)
-    return generate_answer(prompt), sources
+    return generate_answer(prompt), sources, context.split(CONTEXT_SEPARATOR)
+
+
+def answer(query: str, student_profile: dict | None = None) -> tuple[str, list[dict]]:
+    """Retrieve once, answer once. Returns (answer_text, sources)."""
+    text, sources, _ = answer_with_context(query, student_profile)
+    return text, sources
 
 
 if __name__ == "__main__":
