@@ -131,7 +131,10 @@ export default function AdvisorShell() {
     form.append("file", file);
     try {
       const res = await fetch(`${API_URL}/upload-transcript`, { method: "POST", body: form });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(typeof body?.detail === "string" ? body.detail : "");
+      }
       const data: StudentProfile = await res.json();
       setProfile(data);
       setMessages((prev) => [
@@ -143,13 +146,15 @@ export default function AdvisorShell() {
           createdAt: Date.now(),
         },
       ]);
-    } catch {
+    } catch (e) {
       setMessages((prev) => [
         ...prev,
         {
           id: `err-${Date.now()}`,
           role: "assistant",
-          content: "Couldn't parse that transcript. Make sure it's a PDF degree audit from Lafayette.",
+          content:
+            (e instanceof Error && e.message) ||
+            "Couldn't parse that transcript. Make sure it's a PDF degree audit from Lafayette.",
           createdAt: Date.now(),
         },
       ]);

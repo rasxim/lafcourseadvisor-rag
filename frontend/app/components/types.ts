@@ -21,6 +21,20 @@ export type Course = {
   title: string;
   grade?: string;
   credits: number;
+  term?: string;
+  note?: string;
+};
+
+export type Requirement = {
+  block: string;
+  status: string;
+  still_needed: string[];
+  credits_required?: number;
+  credits_applied?: number;
+  classes_required?: number;
+  classes_applied?: number;
+  unmet_conditions?: string;
+  notes?: string[];
 };
 
 export type StudentProfile = {
@@ -28,10 +42,19 @@ export type StudentProfile = {
   major: string;
   class_year: number;
   overall_gpa: number;
+  degree?: string;
+  minor?: string;
+  expected_graduation?: string;
+  advisor?: string;
+  catalog_year?: string;
+  audit_date?: string;
+  major_gpa?: number;
   completed_courses: Course[];
   in_progress_courses: Course[];
+  requirements?: Requirement[];
   credits: {
     required: number;
     applied: number;
+    still_needed?: number;
   };
 };

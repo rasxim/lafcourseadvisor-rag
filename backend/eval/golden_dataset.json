@@ -101,7 +101,7 @@
     "id": "gap_04",
     "category": "degree_gap",
     "query": "How many credits do I have left to complete my degree?",
-    "expected_answer": "You currently have 15 credits applied toward your 32-credit degree requirement. You still need 17 more credits to graduate.",
+    "expected_answer": "You currently have 16 credits applied (including in-progress classes) toward your 32-credit degree requirement. You still need 16 more credits to graduate.",
     "notes": "Tests credit count gap from student profile."
   },
   {

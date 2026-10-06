@@ -133,12 +133,18 @@ export default function TranscriptUploadModal({ onClose, onSuccess, apiUrl }: Tr
     form.append("file", selectedFile);
     try {
       const res = await fetch(`${apiUrl}/upload-transcript`, { method: "POST", body: form });
-      if (!res.ok) throw new Error("Upload failed");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(typeof body?.detail === "string" ? body.detail : "");
+      }
       const data: StudentProfile = await res.json();
       setProfile(data);
       setUploadState("success");
-    } catch {
-      setErrorMsg("Couldn't parse that transcript. Make sure it's a PDF degree audit from Lafayette.");
+    } catch (e) {
+      setErrorMsg(
+        (e instanceof Error && e.message) ||
+          "Couldn't parse that transcript. Make sure it's a PDF degree audit from Lafayette."
+      );
       setUploadState("error");
     }
   }

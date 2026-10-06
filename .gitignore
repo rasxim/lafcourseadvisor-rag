@@ -35,3 +35,6 @@ z
 # Personal degree audit - never commit
 backend/student_profile.json
 student_profile.json
+
+# Degree audit answer keys (personal data)
+backend/eval/audit_expected*.json
