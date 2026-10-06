@@ -213,10 +213,11 @@ def main() -> None:
         u["text"] = clean_text(u.pop("raw"))
         if u["type"] == "course":
             m = COURSE_HEADING_RE.match(u["name"])
-            dept, num, num2 = m.group("dept"), int(m.group("num")), m.group("num2")
+            # Keep numbers as zero-padded strings: "FYS 011" must stay "FYS 011".
+            dept, num, num2 = m.group("dept"), m.group("num"), m.group("num2")
             codes = [f"{dept} {num}"]
-            if num2 and 0 < int(num2) - num <= 10:
-                codes = [f"{dept} {n}" for n in range(num, int(num2) + 1)]
+            if num2 and 0 < int(num2) - int(num) <= 10:
+                codes = [f"{dept} {n:03d}" for n in range(int(num), int(num2) + 1)]
             elif num2:
                 codes.append(f"{dept} {num2}")
             u["codes"] = codes

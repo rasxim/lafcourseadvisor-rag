@@ -28,7 +28,8 @@ SEMANTIC_MIN_SIM = 0.25
 MAX_DIGEST_LINES = 70
 MAX_SEMANTIC_CHARS = 5000
 
-COURSE_CODE_RE = re.compile(r"\b([A-Za-z][A-Za-z&]{1,4})\s?-?(\d{3})\b")
+# Two-digit numbers are accepted so "FYS 64" finds "FYS 064".
+COURSE_CODE_RE = re.compile(r"\b([A-Za-z][A-Za-z&]{1,4})\s?-?(\d{2,3})\b")
 
 _STOPWORDS = {"and", "of", "the", "in", "a", "an", "s", "for", "to", "with"}
 
@@ -151,7 +152,7 @@ def _load_index() -> Index:
 def extract_course_codes(query: str, dept_codes: set[str]) -> list[str]:
     codes = []
     for dept, num in COURSE_CODE_RE.findall(query):
-        code = f"{dept.upper()} {num}"
+        code = f"{dept.upper()} {num.zfill(3)}"
         if dept.upper() in dept_codes and code not in codes:
             codes.append(code)
     return codes
@@ -336,7 +337,10 @@ class Retriever:
         # 2. Programs named in the question. Course codes are blanked out first so
         # that "CS 203" doesn't also match the Computer Science program.
         def _blank(m: re.Match) -> str:
-            return " " if m.group(1).upper() in self.idx.dept_codes else m.group(0)
+            dept, num = m.group(1).upper(), m.group(2)
+            if dept in self.idx.dept_codes and (len(num) == 3 or f"{dept} {num.zfill(3)}" in self.idx.by_code):
+                return " "
+            return m.group(0)
 
         program_query = COURSE_CODE_RE.sub(_blank, query)
         add(self._programs(program_query, year, _wanted_degree(program_query), "program named in question"))
